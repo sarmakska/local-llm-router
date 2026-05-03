@@ -1,0 +1,33 @@
+backends:
+  local:
+    type: ollama
+    endpoint: http://localhost:11434
+    models: [llama3.2:3b, qwen2.5-coder:7b]
+  sarmalink:
+    type: sarmalink
+    endpoint: https://api.sarmalink.ai/v1
+    model: smart
+  frontier:
+    type: openai
+    endpoint: https://api.openai.com/v1
+    model: gpt-4o
+
+routes:
+  - match: { sensitivity: high }
+    backend: local
+    reason: "Privacy: never leave the machine"
+
+  - match: { task: code, complexity: low }
+    backend: local
+    fallback: sarmalink
+
+  - match: { task: code, complexity: high }
+    backend: frontier
+    fallback: sarmalink
+
+  - match: { task: web_search }
+    backend: sarmalink
+    reason: "Live tools available"
+
+  - default: sarmalink
+    fallback: frontier
