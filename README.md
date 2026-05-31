@@ -3,34 +3,30 @@
 [![License](https://img.shields.io/github/license/sarmakska/local-llm-router)](LICENSE)
 [![Top language](https://img.shields.io/github/languages/top/sarmakska/local-llm-router)](https://github.com/sarmakska/local-llm-router)
 [![Last commit](https://img.shields.io/github/last-commit/sarmakska/local-llm-router)](https://github.com/sarmakska/local-llm-router/commits/main)
-[![Ollama](https://img.shields.io/badge/Ollama-supported-black)](https://ollama.com)
+[![Ollama](https://img.shields.io/badge/Ollama-0.5-black)](https://ollama.com)
 [![OpenAI compatible](https://img.shields.io/badge/OpenAI-compatible-412991)](https://platform.openai.com)
 
 **Route every prompt to the cheapest model that can do the job. Local first, cloud when needed.**
 
+A drop-in OpenAI-compatible proxy that classifies each request, applies your declarative YAML policy, and dispatches to a local Ollama model, hosted SarmaLink-AI, or a frontier provider. It speaks both Chat Completions and the Responses API, streams natively, and resolves model families (Qwen 2.5 Coder, Gemma 3, Llama 4) so one policy drives your whole fleet. When the local model is too slow for a route's latency budget, it spills to the cloud automatically.
+
 Built by [Sarma Linux](https://sarmalinux.com).
 
 ---
-
-## What this is
-
-A drop-in OpenAI-compatible proxy. Your client points at `local-llm-router` instead of OpenAI. The router classifies the request, applies your declarative YAML policy, and decides whether to send it to a local Ollama model, hosted SarmaLink-AI, or a frontier provider.
-
-The economics of LLM apps reward routing. A small local model handles the bulk of trivial traffic for free. A mid-tier hosted model handles common cases. Frontier models handle the hard slice. The trick is deciding which is which without a human in the loop. This is that.
 
 ## Architecture
 
 ```mermaid
 graph TD
   C[OpenAI SDK / curl / any client]
-  C -->|"POST /v1/chat/completions"| R[local-llm-router]
+  C -->|"POST /v1/chat/completions or /v1/responses"| R[local-llm-router]
   R --> CL[Classifier]
-  CL -->|task type, sensitivity, complexity| D[Decision Engine]
-  D -->|read| P[policy.yaml]
+  CL -->|task, complexity, sensitivity, modality, family| D[Decision engine]
+  D -->|read on startup| P[policy.yaml]
+  D -->|latency probe| M[(metrics SQLite)]
   D --> O[Ollama local]
   D --> SL[SarmaLink-AI cloud]
   D --> OAI[OpenAI frontier]
-  D --> M[Metrics / A/B store]
 
   classDef local fill:#22c55e,stroke:#22c55e,color:#fff
   classDef cloud fill:#a78bfa,stroke:#a78bfa,color:#fff
@@ -44,7 +40,6 @@ graph TD
 git clone https://github.com/sarmakska/local-llm-router.git
 cd local-llm-router
 pnpm install
-cp .env.example .env
 cp policy.example.yaml policy.yaml
 pnpm dev
 ```
@@ -57,51 +52,102 @@ client = OpenAI(base_url="http://localhost:3030/v1", api_key="anything")
 response = client.chat.completions.create(model="auto", messages=[{"role": "user", "content": "hi"}])
 ```
 
-The router picks the actual backend.
-
-The full guide lives in the [project wiki](https://github.com/sarmakska/local-llm-router/wiki).
+Set `model: "auto"` and the router picks the backend and the concrete model. The
+full guide lives in the [project wiki](https://github.com/sarmakska/local-llm-router/wiki).
 
 ## What is in the box
 
-- An OpenAI-compatible HTTP server (`/v1/chat/completions`) built on Hono.
-- A deterministic classifier that tags each request with task type, complexity, sensitivity, and an estimated token count, with no extra model call.
-- A decision engine that walks your YAML policy top to bottom and resolves every request to a backend, with optional per-route fallback.
-- Three backends out of the box: Ollama (local), SarmaLink-AI (cloud), and OpenAI (frontier). A registry pattern makes a new backend roughly sixty lines.
-- A SQLite metrics collector recording per-route latency, success, token cost, and fallback rate, plus a rolling A/B loop that promotes cheaper routes and rolls back on quality drops.
-- A `policy.example.yaml` to copy, a Dockerfile, and a typed configuration loader validated with Zod at startup.
+- An OpenAI-compatible HTTP server built on Hono, serving `/v1/chat/completions`
+  and the Responses API at `/v1/responses`, with native streaming on both.
+- A deterministic classifier that tags each request with task type, complexity,
+  sensitivity, modality, an open-weight model family, and an estimated token
+  count, with no extra model call.
+- A decision engine that walks your YAML policy top to bottom, resolves the
+  family to a concrete model (Qwen 2.5 Coder for code, Gemma 3 for vision,
+  Llama 4 for general work), and honours per-route latency budgets and fallback.
+- Three backends out of the box: Ollama (local), SarmaLink-AI (cloud), and
+  OpenAI (frontier). A registry pattern makes a new backend roughly sixty lines.
+- A metrics store on Node's built-in `node:sqlite` recording per-route latency,
+  success, and fallback rate, exposed as JSON at `/v1/metrics` and Prometheus
+  text at `/metrics`.
+- A rolling A/B loop that mirrors a sample of traffic to a candidate backend in
+  the background and recommends promotions from real production latency.
+- A `policy.example.yaml` to copy, a Dockerfile, and a typed configuration
+  loader validated with Zod at startup.
 
 ## When to use this / when not to
 
-Use this when you run Ollama locally and want automatic cloud fallback, when you want to cut LLM spend by sending trivial traffic to cheap models without touching application code, or when regulated prompts must stay on the local network while general traffic still reaches the cloud. Any existing OpenAI client works unchanged: point it at the router and set `model: "auto"`.
+Use this when you run Ollama locally and want automatic cloud fallback, when you
+want to cut LLM spend by sending trivial traffic to cheap models without touching
+application code, or when regulated prompts must stay on the local network while
+general traffic still reaches the cloud. Any existing OpenAI client works
+unchanged: point it at the router and set `model: "auto"`.
 
-Do not use this if you only ever call a single model, since the routing layer buys you nothing. It is also not a general API gateway: there is no auth, rate limiting, or billing built in, so put it behind your own ingress for those concerns. If you need a hosted multi-provider gateway with failover and plugins rather than a self-hosted local-first router, reach for [Sarmalink-ai](https://github.com/sarmakska/Sarmalink-ai) instead.
+Do not use this if you only ever call a single model, since the routing layer
+buys you nothing. It is also not a general API gateway: there is no auth, rate
+limiting, or billing built in, so put it behind your own ingress for those
+concerns. If you need a hosted multi-provider gateway with failover and plugins
+rather than a self-hosted local-first router, reach for
+[Sarmalink-ai](https://github.com/sarmakska/Sarmalink-ai) instead.
 
 ## Policy DSL
 
 ```yaml
 backends:
-  local: { type: ollama, endpoint: http://localhost:11434, models: [llama3.2:3b, qwen2.5-coder:7b] }
-  sarmalink: { type: sarmalink, endpoint: https://api.sarmalink.ai/v1, model: smart }
-  frontier: { type: openai, model: gpt-4o }
+  local:
+    type: ollama
+    endpoint: http://localhost:11434
+    families:
+      qwen-coder: qwen2.5-coder:7b
+      gemma: gemma3:12b
+      llama: llama4:16x17b
+    p50Ms: 1800
+  sarmalink: { type: sarmalink, endpoint: https://api.sarmalink.ai/v1, model: smart, p50Ms: 600 }
+  frontier: { type: openai, model: gpt-4o, p50Ms: 900 }
 
 routes:
   - match: { sensitivity: high }
     backend: local
-    reason: "Privacy pin: never leave the machine"
+    reason: "Privacy: never leave the machine"
 
   - match: { task: code, complexity: low }
     backend: local
     fallback: sarmalink
+    latencyBudgetMs: 2500
 
-  - match: { task: code, complexity: high }
-    backend: frontier
+  - match: { task: vision }
+    backend: local
+    fallback: frontier
+    latencyBudgetMs: 3000
 
   - match: { task: web_search }
     backend: sarmalink
 
-  - default: sarmalink
-    fallback: frontier
+  - default: local
+    fallback: sarmalink
+    latencyBudgetMs: 1200
 ```
+
+The classifier emits `task`, `complexity`, `sensitivity`, `modality`, `family`,
+and `tokens`; a `match` block is a conjunction over any of them. See the
+[Policy DSL wiki page](https://github.com/sarmakska/local-llm-router/wiki/Policy-DSL).
+
+## Model families and latency budgets
+
+The classifier picks an open-weight family for each request and the decision
+engine resolves it to a concrete model from the chosen backend's `families` map:
+code to Qwen 2.5 Coder, image prompts to Gemma 3, everything else to Llama 4. A
+route may also set `latencyBudgetMs`. When the primary backend's expected
+latency, taken from live metrics or the backend's `p50Ms` hint, exceeds the
+budget and the fallback is faster, the request shifts to the fallback so a slow
+local model never blows a tight interactive budget.
+
+## Responses API
+
+The router also serves the OpenAI Responses API at `/v1/responses`. It accepts
+`input`, `instructions`, and content parts, routes through the same engine and
+backends, and returns a Responses envelope with `output`, `output_text`, and
+`usage`. Streaming is passed through as the backend's native SSE.
 
 ## Configuration
 
@@ -112,15 +158,20 @@ routes:
 | `LLR_DB` | metrics SQLite path | `./metrics.db` |
 | `OPENAI_API_KEY` | frontier backend | unset |
 | `SARMALINK_API_KEY` | SarmaLink backend | unset |
-| `OLLAMA_URL` | local Ollama URL | `http://localhost:11434` |
 
-## Privacy pinning
+## Metrics and rolling A/B
 
-Mark requests as sensitive in client headers (`X-LLR-Sensitivity: high`) or in policy by tenant. Sensitive requests never leave the local network.
+Per-route success, latency, and fallback rate are stored in SQLite. `GET /v1/metrics`
+returns a JSON summary, `GET /metrics` returns Prometheus text, and `GET /v1/ab`
+reports which candidate backends are ready to promote. Enable A/B in policy:
 
-## Metrics + rolling A/B
-
-Per-route success, latency, and token cost stored in SQLite. The router occasionally promotes cheaper routes to a small percentage of traffic and observes downstream scorer feedback. Quality drops trigger automatic rollback.
+```yaml
+ab:
+  enabled: true
+  sampleRate: 0.05
+  candidates:
+    local: sarmalink
+```
 
 ## Deployment
 
@@ -132,27 +183,23 @@ docker run -p 3030:3030 \
   local-llm-router
 ```
 
-For local development, just run `pnpm dev` alongside an Ollama instance.
+For local development, run `pnpm dev` alongside an Ollama instance. See the
+[Deployment wiki page](https://github.com/sarmakska/local-llm-router/wiki/Deployment).
 
-## Roadmap
+## Wiki
 
-- [x] OpenAI-compatible chat completions
-- [x] Ollama / SarmaLink / OpenAI backends
-- [x] YAML policy
-- [x] Privacy pinning
-- [x] SQLite metrics
-- [ ] Embeddings endpoint
-- [ ] Hugging Face Inference API backend
-- [ ] vLLM backend for self-hosted GPU
-- [ ] Prometheus metrics export
-- [ ] Web dashboard for route stats
+- [Architecture](https://github.com/sarmakska/local-llm-router/wiki/Architecture)
+- [Quick-Start](https://github.com/sarmakska/local-llm-router/wiki/Quick-Start)
+- [Policy-DSL](https://github.com/sarmakska/local-llm-router/wiki/Policy-DSL)
+- [Backends](https://github.com/sarmakska/local-llm-router/wiki/Backends)
+- [Privacy-Pinning](https://github.com/sarmakska/local-llm-router/wiki/Privacy-Pinning)
+- [Metrics-and-AB](https://github.com/sarmakska/local-llm-router/wiki/Metrics-and-AB)
+- [Deployment](https://github.com/sarmakska/local-llm-router/wiki/Deployment)
+- [Roadmap](https://github.com/sarmakska/local-llm-router/wiki/Roadmap)
 
 ## License
 
-MIT.
-
-Built by [Sarma Linux](https://sarmalinux.com).
-
+MIT. Built by [Sarma Linux](https://sarmalinux.com).
 
 ---
 
