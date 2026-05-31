@@ -1,16 +1,18 @@
-FROM node:22-alpine AS deps
+FROM node:24-alpine AS builder
 WORKDIR /app
-COPY package*.json ./
-RUN npm ci --omit=dev || npm install --production
-
-FROM node:22-alpine AS builder
-WORKDIR /app
-COPY package*.json ./
-RUN npm install
+RUN corepack enable
+COPY package.json pnpm-lock.yaml ./
+RUN pnpm install --frozen-lockfile
 COPY . .
-RUN npm run build
+RUN pnpm build
 
-FROM node:22-alpine
+FROM node:24-alpine AS deps
+WORKDIR /app
+RUN corepack enable
+COPY package.json pnpm-lock.yaml ./
+RUN pnpm install --prod --frozen-lockfile
+
+FROM node:24-alpine
 WORKDIR /app
 COPY --from=deps /app/node_modules ./node_modules
 COPY --from=builder /app/dist ./dist
