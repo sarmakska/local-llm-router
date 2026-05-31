@@ -2,32 +2,70 @@ backends:
   local:
     type: ollama
     endpoint: http://localhost:11434
-    models: [llama3.2:3b, qwen2.5-coder:7b]
+    # The classifier picks a family; the router resolves it to one of these
+    # models. Code goes to Qwen 2.5 Coder, vision to Gemma 3, everything else
+    # to Llama 4. `models` is fallback metadata for /v1/models and model[0].
+    families:
+      qwen-coder: qwen2.5-coder:7b
+      gemma: gemma3:12b
+      llama: llama4:16x17b
+    models: [llama4:16x17b, qwen2.5-coder:7b, gemma3:12b]
+    # Median latency hint used by the latency-budget decision before live
+    # metrics exist. A local 12B model on a laptop is not instant.
+    p50Ms: 1800
+
   sarmalink:
     type: sarmalink
     endpoint: https://api.sarmalink.ai/v1
     model: smart
+    p50Ms: 600
+
   frontier:
     type: openai
     endpoint: https://api.openai.com/v1
     model: gpt-4o
+    p50Ms: 900
 
 routes:
+  # Privacy pin: sensitive requests never leave the machine, budget or not.
   - match: { sensitivity: high }
     backend: local
     reason: "Privacy: never leave the machine"
 
+  # Short code edits run on local Qwen 2.5 Coder, with a cloud fallback if the
+  # local model is slow or down. The 2500ms budget tolerates local inference.
   - match: { task: code, complexity: low }
     backend: local
     fallback: sarmalink
+    latencyBudgetMs: 2500
 
+  # Hard code goes straight to the frontier model.
   - match: { task: code, complexity: high }
     backend: frontier
     fallback: sarmalink
 
+  # Image prompts route to local Gemma 3 with a vision-capable cloud fallback.
+  - match: { task: vision }
+    backend: local
+    fallback: frontier
+    latencyBudgetMs: 3000
+
+  # Live-data questions need cloud tools.
   - match: { task: web_search }
     backend: sarmalink
     reason: "Live tools available"
 
-  - default: sarmalink
-    fallback: frontier
+  # Everything else: local first on a tight interactive budget, spilling to the
+  # faster hosted backend when the local model cannot keep up.
+  - default: local
+    fallback: sarmalink
+    latencyBudgetMs: 1200
+
+# Rolling A/B: mirror a sample of local traffic to the hosted backend in the
+# background and record its latency and success, so you can see from real
+# traffic whether sarmalink is worth promoting. Disabled by default.
+ab:
+  enabled: false
+  sampleRate: 0.05
+  candidates:
+    local: sarmalink
