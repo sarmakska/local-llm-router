@@ -2,29 +2,12 @@
 
 ## Reporting a vulnerability
 
-If you have found a security issue in this project, please report it privately. Do not open a public GitHub issue.
+If you have found a security issue in this project, please report it privately by email to sarma@sarmalinux.com rather than opening a public GitHub issue. Include a clear description of the issue, the steps to reproduce it, the commit SHA you tested against, and any proof-of-concept code or output. The more detail you give me, the faster I can confirm and fix it.
 
-**Email:** sarma@sarmalinux.com
+## Response policy
 
-Please include:
-- A clear description of the issue
-- Steps to reproduce
-- The version (commit SHA) you tested against
-- Any proof-of-concept code or output
-
-You should expect an acknowledgement within 5 working days. Confirmed issues will be patched on `main` and released as a tagged version; reporters are credited in the release notes unless they request otherwise.
-
-## Supported versions
-
-Only the latest commit on `main` receives security fixes. Pin to a tagged release if you need a stable version surface.
+I respond within 7 days. I will acknowledge your report, confirm whether I can reproduce the issue, and tell you my planned fix and timeline. Confirmed issues are patched on `main` and released as a tagged version, and I credit reporters in the release notes unless you ask me not to. Only the latest commit on `main` receives security fixes, so pin to a tagged release if you need a stable surface.
 
 ## Scope
 
-This policy covers the code in this repository. Bugs in upstream dependencies should be reported to those projects directly.
-
-## Out of scope
-
-- Issues in third-party services (Vercel, Supabase, GitHub, Cloudflare, etc.)
-- Findings that require physical access to a developer machine
-- Theoretical risks without a working proof of concept
-- Denial of service against demo / hosted instances
+This policy covers the code in this repository. Vulnerabilities in upstream dependencies should be reported to those projects directly, and issues in third-party services, findings that require physical access to a developer machine, and purely theoretical risks without a working proof of concept are out of scope.
