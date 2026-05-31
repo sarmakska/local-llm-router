@@ -1,0 +1,28 @@
+backends:
+  local:
+    type: ollama
+    endpoint: http://127.0.0.1:0
+    families:
+      qwen-coder: qwen2.5-coder:7b
+      gemma: gemma3:12b
+      llama: llama4:16x17b
+    models: [llama4:16x17b, qwen2.5-coder:7b, gemma3:12b]
+    p50Ms: 1800
+
+  sarmalink:
+    type: sarmalink
+    endpoint: http://127.0.0.1:0
+    model: smart
+    p50Ms: 600
+
+routes:
+  - match: { sensitivity: high }
+    backend: local
+    reason: "Privacy pin"
+
+  - match: { task: code, complexity: low }
+    backend: local
+    fallback: sarmalink
+
+  - default: sarmalink
+    fallback: local
