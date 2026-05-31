@@ -1,8 +1,12 @@
 node_modules
 dist
+build
 *.log
 .env
+.env*.local
 .DS_Store
 *.db
 *.db-journal
 .vscode
+coverage
+policy.yaml
