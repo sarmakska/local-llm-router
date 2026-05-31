@@ -1,12 +1,10 @@
 # local-llm-router
 
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
-[![Node](https://img.shields.io/badge/Node-22-339933?logo=node.js&logoColor=white)](https://nodejs.org)
-[![TypeScript](https://img.shields.io/badge/TypeScript-5.6-blue?logo=typescript&logoColor=white)](https://typescriptlang.org)
-[![Hono](https://img.shields.io/badge/Hono-4-E36002)](https://hono.dev)
+[![License](https://img.shields.io/github/license/sarmakska/local-llm-router)](LICENSE)
+[![Top language](https://img.shields.io/github/languages/top/sarmakska/local-llm-router)](https://github.com/sarmakska/local-llm-router)
+[![Last commit](https://img.shields.io/github/last-commit/sarmakska/local-llm-router)](https://github.com/sarmakska/local-llm-router/commits/main)
 [![Ollama](https://img.shields.io/badge/Ollama-supported-black)](https://ollama.com)
 [![OpenAI compatible](https://img.shields.io/badge/OpenAI-compatible-412991)](https://platform.openai.com)
-[![Open Source](https://img.shields.io/badge/Open_Source-%E2%9D%A4-red)](https://github.com/sarmakska/local-llm-router)
 
 **Route every prompt to the cheapest model that can do the job. Local first, cloud when needed.**
 
@@ -60,6 +58,23 @@ response = client.chat.completions.create(model="auto", messages=[{"role": "user
 ```
 
 The router picks the actual backend.
+
+The full guide lives in the [project wiki](https://github.com/sarmakska/local-llm-router/wiki).
+
+## What is in the box
+
+- An OpenAI-compatible HTTP server (`/v1/chat/completions`) built on Hono.
+- A deterministic classifier that tags each request with task type, complexity, sensitivity, and an estimated token count, with no extra model call.
+- A decision engine that walks your YAML policy top to bottom and resolves every request to a backend, with optional per-route fallback.
+- Three backends out of the box: Ollama (local), SarmaLink-AI (cloud), and OpenAI (frontier). A registry pattern makes a new backend roughly sixty lines.
+- A SQLite metrics collector recording per-route latency, success, token cost, and fallback rate, plus a rolling A/B loop that promotes cheaper routes and rolls back on quality drops.
+- A `policy.example.yaml` to copy, a Dockerfile, and a typed configuration loader validated with Zod at startup.
+
+## When to use this / when not to
+
+Use this when you run Ollama locally and want automatic cloud fallback, when you want to cut LLM spend by sending trivial traffic to cheap models without touching application code, or when regulated prompts must stay on the local network while general traffic still reaches the cloud. Any existing OpenAI client works unchanged: point it at the router and set `model: "auto"`.
+
+Do not use this if you only ever call a single model, since the routing layer buys you nothing. It is also not a general API gateway: there is no auth, rate limiting, or billing built in, so put it behind your own ingress for those concerns. If you need a hosted multi-provider gateway with failover and plugins rather than a self-hosted local-first router, reach for [Sarmalink-ai](https://github.com/sarmakska/Sarmalink-ai) instead.
 
 ## Policy DSL
 
@@ -158,6 +173,6 @@ Part of a portfolio of twelve production-shaped open-source repositories built a
 | [webhook-to-email](https://github.com/sarmakska/webhook-to-email) | Webhook receiver that forwards events to email via Resend |
 | [k8s-ops-toolkit](https://github.com/sarmakska/k8s-ops-toolkit) | Helm chart for shipping Next.js to Kubernetes with full observability stack |
 | [terraform-stack](https://github.com/sarmakska/terraform-stack) | Vercel + Supabase + Cloudflare + DigitalOcean modules in one Terraform repo |
-| [staff-portal](https://github.com/sarmakska/staff-portal) | Open-source HR / ops portal — leave, attendance, expenses, kiosk mode |
+| [staff-portal](https://github.com/sarmakska/staff-portal) | Open-source HR / ops portal for leave, attendance, expenses, kiosk mode |
 
 Engineering essays at [sarmalinux.com/blog](https://sarmalinux.com/blog) &middot; All projects at [sarmalinux.com/open-source](https://sarmalinux.com/open-source)
