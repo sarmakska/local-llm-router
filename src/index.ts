@@ -5,7 +5,7 @@ import { loadPolicy } from './config/loader.js'
 import { decide, type LatencyProbe } from './routing/decision.js'
 import { classify } from './routing/classifier.js'
 import { runBackend, type BackendResult } from './backends/registry.js'
-import { record, summary, prometheus, p50Latency } from './metrics/collector.js'
+import { record, summary, prometheus, p50Latency, sanitiseHours } from './metrics/collector.js'
 import { abConfig, pickShadow, runShadow, report } from './metrics/ab.js'
 import {
   responsesToChat,
@@ -194,21 +194,22 @@ app.post('/v1/responses', async (c) => {
   }
 })
 
-// JSON metrics summary over the last N hours (default 24).
+// JSON metrics summary over the last N hours (default 24). The window is
+// sanitised so a malformed or hostile `hours` param cannot poison the query.
 app.get('/v1/metrics', (c) => {
-  const hours = Number(c.req.query('hours') || 24)
+  const hours = sanitiseHours(c.req.query('hours'))
   return c.json({ window_hours: hours, backends: summary(hours) })
 })
 
 // Rolling A/B report: which candidate backends are ready to promote.
 app.get('/v1/ab', (c) => {
-  const hours = Number(c.req.query('hours') || 24)
+  const hours = sanitiseHours(c.req.query('hours'))
   return c.json({ enabled: ab.enabled, window_hours: hours, pairs: report(policy, hours) })
 })
 
 // Prometheus text exposition.
 app.get('/metrics', (c) => {
-  const hours = Number(c.req.query('hours') || 24)
+  const hours = sanitiseHours(c.req.query('hours'))
   return c.text(prometheus(hours), 200, { 'Content-Type': 'text/plain; version=0.0.4' })
 })
 

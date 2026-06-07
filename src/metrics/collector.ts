@@ -89,6 +89,20 @@ export function record(event: MetricEvent) {
   )
 }
 
+/**
+ * Clamp a caller-supplied window in hours to a sane positive range. Query
+ * params arrive as strings and `Number('abc')` is `NaN`, which would otherwise
+ * flow into the `ts >= ?` bound and silently return an empty or garbage window.
+ * A negative window would query the future and return nothing. We coerce both
+ * to the default and cap the window at one year so a single request cannot scan
+ * the whole table.
+ */
+export function sanitiseHours(value: unknown, fallback = 24): number {
+  const n = typeof value === 'number' ? value : Number(value)
+  if (!Number.isFinite(n) || n <= 0) return fallback
+  return Math.min(n, 24 * 365)
+}
+
 export interface BackendSummary {
   backend: string
   calls: number
@@ -97,7 +111,7 @@ export interface BackendSummary {
 }
 
 export function summary(hours = 24): BackendSummary[] {
-  const since = Date.now() - hours * 3600 * 1000
+  const since = Date.now() - sanitiseHours(hours) * 3600 * 1000
   return db()
     .prepare(
       `SELECT backend, COUNT(*) AS calls, AVG(latency_ms) AS avg_latency,
@@ -108,32 +122,59 @@ export function summary(hours = 24): BackendSummary[] {
 }
 
 /**
- * Approximate median latency for a backend over a recent window, used as the
- * live signal for the latency-budget decision. SQLite has no percentile
- * function, so we compute it with an offset over an ordered window. Returns
- * undefined when there is not enough data to be meaningful.
+ * Approximate a latency percentile for a backend over a recent window. SQLite
+ * has no percentile function, so we count the successful samples and read the
+ * value at the rank an ordered window puts the percentile at. `quantile` is in
+ * [0, 1]; 0.5 is the median, 0.95 the tail. Returns undefined when there is not
+ * enough data to be meaningful.
  */
-export function p50Latency(backend: string, hours = 1, minSamples = 5): number | undefined {
-  const since = Date.now() - hours * 3600 * 1000
+export function pLatency(
+  backend: string,
+  quantile: number,
+  hours = 1,
+  minSamples = 5,
+): number | undefined {
+  const since = Date.now() - sanitiseHours(hours, 1) * 3600 * 1000
   const count = (
     db()
       .prepare(`SELECT COUNT(*) AS n FROM metrics WHERE backend = ? AND ts >= ? AND ok = 1`)
       .get(backend, since) as { n: number }
   ).n
   if (count < minSamples) return undefined
-  const offset = Math.floor(count / 2)
+  const q = Math.min(Math.max(quantile, 0), 1)
+  // Nearest-rank: the smallest sample whose rank covers the quantile. Clamp the
+  // offset to the last row so q = 1 reads the maximum rather than running off
+  // the end of the window.
+  const offset = Math.min(Math.ceil(q * count) - (q > 0 ? 1 : 0), count - 1)
   const row = db()
     .prepare(
       `SELECT latency_ms FROM metrics WHERE backend = ? AND ts >= ? AND ok = 1
        ORDER BY latency_ms ASC LIMIT 1 OFFSET ?`,
     )
-    .get(backend, since, offset) as { latency_ms: number } | undefined
+    .get(backend, since, Math.max(offset, 0)) as { latency_ms: number } | undefined
   return row?.latency_ms
+}
+
+/**
+ * Approximate median latency for a backend, used as the live signal for the
+ * latency-budget decision.
+ */
+export function p50Latency(backend: string, hours = 1, minSamples = 5): number | undefined {
+  return pLatency(backend, 0.5, hours, minSamples)
+}
+
+/**
+ * Approximate p95 latency for a backend. Tail latency, not the average, is what
+ * blows an interactive budget, so the A/B report uses this to gate promotion.
+ */
+export function p95Latency(backend: string, hours = 1, minSamples = 5): number | undefined {
+  return pLatency(backend, 0.95, hours, minSamples)
 }
 
 /** Render the recent summary in Prometheus text exposition format. */
 export function prometheus(hours = 24): string {
-  const rows = summary(hours)
+  const window = sanitiseHours(hours)
+  const rows = summary(window)
   const lines: string[] = [
     '# HELP llr_backend_calls_total Total backend calls in the window.',
     '# TYPE llr_backend_calls_total counter',
@@ -141,12 +182,18 @@ export function prometheus(hours = 24): string {
     '# TYPE llr_backend_success_total counter',
     '# HELP llr_backend_latency_avg_ms Average backend latency in the window.',
     '# TYPE llr_backend_latency_avg_ms gauge',
+    '# HELP llr_backend_latency_p95_ms Approximate p95 backend latency in the window.',
+    '# TYPE llr_backend_latency_p95_ms gauge',
   ]
   for (const r of rows) {
     const b = JSON.stringify(r.backend)
     lines.push(`llr_backend_calls_total{backend=${b}} ${r.calls}`)
     lines.push(`llr_backend_success_total{backend=${b}} ${r.successes}`)
     lines.push(`llr_backend_latency_avg_ms{backend=${b}} ${Math.round(r.avg_latency)}`)
+    const p95 = p95Latency(r.backend, window, 1)
+    if (typeof p95 === 'number') {
+      lines.push(`llr_backend_latency_p95_ms{backend=${b}} ${p95}`)
+    }
   }
   return lines.join('\n') + '\n'
 }
