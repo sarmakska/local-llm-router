@@ -1,6 +1,6 @@
 import type { Policy } from '../config/loader.js'
 import { runBackend } from '../backends/registry.js'
-import { record, summary, type BackendSummary } from './collector.js'
+import { record, summary, p95Latency, type BackendSummary } from './collector.js'
 
 /**
  * Rolling A/B. When enabled in policy, a small sample of non-streaming traffic
@@ -79,6 +79,8 @@ export interface AbReportRow {
   candidate: string
   primaryAvgLatency: number | null
   candidateAvgLatency: number | null
+  primaryP95Latency: number | null
+  candidateP95Latency: number | null
   candidateSamples: number
   recommendation: 'promote' | 'hold' | 'insufficient-data'
 }
@@ -86,8 +88,10 @@ export interface AbReportRow {
 /**
  * Compare each configured primary/candidate pair over a recent window and emit
  * a recommendation. A candidate is a promotion suggestion when it has enough
- * shadow samples, a success rate at least as good as the primary, and lower
- * average latency.
+ * shadow samples, a success rate at least as good as the primary, a lower
+ * average latency, and a tail (p95) no worse than the primary's. Tail latency
+ * is what actually blows an interactive budget, so a candidate that wins on the
+ * average but loses on the tail is held rather than promoted.
  */
 export function report(policy: Policy, hours = 24, minSamples = 20): AbReportRow[] {
   const cfg = abConfig(policy)
@@ -100,13 +104,22 @@ export function report(policy: Policy, hours = 24, minSamples = 20): AbReportRow
     const p = byBackend.get(primary)
     const c = byBackend.get(candidate)
     const candidateSamples = c?.calls ?? 0
+    const pP95 = p95Latency(primary, hours, minSamples)
+    const cP95 = p95Latency(candidate, hours, minSamples)
     let recommendation: AbReportRow['recommendation'] = 'insufficient-data'
 
     if (candidateSamples >= minSamples && c && p) {
       const pSuccess = p.calls ? p.successes / p.calls : 0
       const cSuccess = c.calls ? c.successes / c.calls : 0
-      if (cSuccess >= pSuccess && c.avg_latency < p.avg_latency) recommendation = 'promote'
-      else recommendation = 'hold'
+      // Tail check: only block promotion when both tails are known and the
+      // candidate's is worse. Missing tail data does not veto a clear average win.
+      const tailOk =
+        typeof pP95 !== 'number' || typeof cP95 !== 'number' || cP95 <= pP95
+      if (cSuccess >= pSuccess && c.avg_latency < p.avg_latency && tailOk) {
+        recommendation = 'promote'
+      } else {
+        recommendation = 'hold'
+      }
     }
 
     rows.push({
@@ -114,6 +127,8 @@ export function report(policy: Policy, hours = 24, minSamples = 20): AbReportRow
       candidate,
       primaryAvgLatency: p ? Math.round(p.avg_latency) : null,
       candidateAvgLatency: c ? Math.round(c.avg_latency) : null,
+      primaryP95Latency: typeof pP95 === 'number' ? pP95 : null,
+      candidateP95Latency: typeof cP95 === 'number' ? cP95 : null,
       candidateSamples,
       recommendation,
     })

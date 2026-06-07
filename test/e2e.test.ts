@@ -244,4 +244,20 @@ describe('e2e: metrics', () => {
     const text = await res.text()
     expect(text).toContain('llr_backend_calls_total')
   })
+
+  it('sanitises a malformed hours param instead of returning a poisoned window', async () => {
+    const res = await app.request('/v1/metrics?hours=not-a-number')
+    const json = await res.json()
+    // Falls back to the 24h default rather than building a NaN time bound.
+    expect(json.window_hours).toBe(24)
+    expect(Array.isArray(json.backends)).toBe(true)
+    const total = json.backends.reduce((n: number, b: any) => n + b.calls, 0)
+    expect(total).toBeGreaterThan(0)
+  })
+
+  it('clamps a negative hours param so it never queries the future', async () => {
+    const res = await app.request('/v1/ab?hours=-100')
+    const json = await res.json()
+    expect(json.window_hours).toBe(24)
+  })
 })
