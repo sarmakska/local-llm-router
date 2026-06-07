@@ -8,6 +8,15 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- Tail-aware A/B promotion. The `GET /v1/ab` report now compares p95 latency
+  alongside the average for each primary/candidate pair. A candidate is only
+  recommended for promotion when its tail is no worse than the primary's, so a
+  backend that wins on the mean but loses on the tail is held rather than
+  promoted into an interactive path. The report rows carry `primaryP95Latency`
+  and `candidateP95Latency`.
+- Approximate p95 latency per backend in the Prometheus exposition as
+  `llr_backend_latency_p95_ms`, computed from the same nearest-rank percentile
+  helper used by the latency-budget decision.
 - Model-family routing. The classifier now picks an open-weight family for each
   request and the decision engine resolves it to a concrete model from the
   backend's `families` map: Qwen 2.5 Coder for code, Gemma 3 for vision, and
@@ -45,6 +54,14 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   spilling to the hosted backend when the local model cannot keep up.
 - Minimum Node version raised to 24. CI runs on Node 24.
 - Non-breaking dependency bumps: hono, yaml, tsx.
+
+### Fixed
+
+- The `hours` window param on `/v1/metrics`, `/v1/ab`, and `/metrics` is now
+  sanitised. A non-numeric value such as `?hours=abc` previously produced a
+  `NaN` time bound that returned an empty or garbage window, and a negative
+  value queried the future. Both now fall back to the 24h default and the window
+  is capped at one year.
 
 ### Removed
 

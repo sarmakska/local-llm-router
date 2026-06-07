@@ -69,9 +69,14 @@ full guide lives in the [project wiki](https://github.com/sarmakska/local-llm-ro
   OpenAI (frontier). A registry pattern makes a new backend roughly sixty lines.
 - A metrics store on Node's built-in `node:sqlite` recording per-route latency,
   success, and fallback rate, exposed as JSON at `/v1/metrics` and Prometheus
-  text at `/metrics`.
+  text at `/metrics`, including an approximate p95 per backend. The `hours`
+  window param is sanitised, so a malformed or hostile value cannot poison the
+  query.
 - A rolling A/B loop that mirrors a sample of traffic to a candidate backend in
-  the background and recommends promotions from real production latency.
+  the background and recommends promotions from real production latency. The
+  promotion gate is tail-aware: a candidate only earns `promote` when its p95 is
+  no worse than the primary's, so a backend that wins on the average but loses on
+  the tail is held rather than promoted into an interactive path.
 - A `policy.example.yaml` to copy, a Dockerfile, and a typed configuration
   loader validated with Zod at startup.
 
@@ -162,8 +167,10 @@ backends, and returns a Responses envelope with `output`, `output_text`, and
 ## Metrics and rolling A/B
 
 Per-route success, latency, and fallback rate are stored in SQLite. `GET /v1/metrics`
-returns a JSON summary, `GET /metrics` returns Prometheus text, and `GET /v1/ab`
-reports which candidate backends are ready to promote. Enable A/B in policy:
+returns a JSON summary, `GET /metrics` returns Prometheus text with an
+`llr_backend_latency_p95_ms` gauge per backend, and `GET /v1/ab` reports which
+candidate backends are ready to promote. Each endpoint takes an optional `hours`
+window that is clamped to a sane positive range. Enable A/B in policy:
 
 ```yaml
 ab:
@@ -172,6 +179,12 @@ ab:
   candidates:
     local: sarmalink
 ```
+
+The A/B report compares average and p95 latency for each primary/candidate pair.
+A candidate is recommended for promotion only when it matches the primary's
+success rate, beats it on average, and is no worse on the tail. Tail latency,
+not the average, is what blows an interactive budget, so the gate weighs it
+explicitly.
 
 ## Deployment
 
